@@ -58,7 +58,7 @@ To achieve real-time performance:
 ### Create User Interface
 
 Develop a user interface to display the video feed with detected objects.
-```
+```python
 import cv2
 import torch
 from models.experimental import attempt_load
