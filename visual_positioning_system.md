@@ -163,3 +163,128 @@ print("Estimated Position:", position)
 - **Integrate GPS Data**: Combine VPS results with GPS to enhance location estimation.
 
 This setup provides a foundation to build on with additional refinements like handling seasonal changes, lighting adjustments, and integrating a real-time camera feed for live queries. Let me know if you'd like more details on any specific part of the process!
+
+# Real-time Video Capture Querying for VPS
+To integrate a real-time camera feed for live queries, we need to set up continuous video capture and feature extraction from each frame in real-time. By matching features from each captured frame to those in the VPS database, we can estimate the camera’s position based on the closest matches.
+
+Here’s an updated version of the code to support a real-time camera feed using OpenCV's `VideoCapture`. This code assumes you’ve already created and saved the VPS database from the previous example.
+
+### Steps to Integrate Real-Time Camera Feed
+1. **Initialize Camera Feed**: Use OpenCV to capture frames in real time.
+2. **Feature Extraction and Matching**: For each frame, extract ORB features and match them with database features.
+3. **Position Estimation**: Display the estimated position (latitude, longitude) on the frame.
+4. **Display Live Output**: Show the camera feed with the position overlay in real time.
+
+### Real-Time Camera Feed Code
+Here’s the code that implements real-time camera-based localization using the existing VPS database.
+
+```python
+import cv2
+import numpy as np
+import pickle
+from sklearn.neighbors import NearestNeighbors
+
+# Initialize ORB detector
+orb = cv2.ORB_create()
+
+# Load precomputed VPS database
+with open('vps_database.pkl', 'rb') as db_file:
+    database_features, image_metadata = pickle.load(db_file)
+
+# Flatten all descriptors for KNN search
+all_descriptors = np.vstack(database_features)
+knn = NearestNeighbors(n_neighbors=5, algorithm='auto').fit(all_descriptors)
+
+# Start real-time video capture
+cap = cv2.VideoCapture(0)  # Use 0 for the default camera, or replace with the index or path to another camera
+
+def query_vps_live(frame):
+    # Extract features from the current frame
+    _, query_descriptors = orb.detectAndCompute(frame, None)
+    
+    if query_descriptors is None:
+        return None, None
+
+    # Match query descriptors with database descriptors
+    distances, indices = knn.kneighbors(query_descriptors)
+    matched_images = [image_metadata[i[0]] for i in indices]  # Metadata of top matches
+
+    # Calculate the approximate position by averaging GPS of top matches
+    latitudes = [match[1] for match in matched_images]
+    longitudes = [match[2] for match in matched_images]
+    estimated_lat = np.mean(latitudes)
+    estimated_lon = np.mean(longitudes)
+    
+    return estimated_lat, estimated_lon
+
+while cap.isOpened():
+    # Read frame from the camera
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to capture image")
+        break
+
+    # Process frame for position estimation
+    estimated_lat, estimated_lon = query_vps_live(frame)
+
+    if estimated_lat is not None and estimated_lon is not None:
+        # Display estimated position on the frame
+        cv2.putText(
+            frame,
+            f"Latitude: {estimated_lat:.6f}, Longitude: {estimated_lon:.6f}",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
+            cv2.LINE_AA
+        )
+    else:
+        # No position estimation available
+        cv2.putText(
+            frame,
+            "Position: Unable to determine",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA
+        )
+
+    # Show the frame with the position overlay
+    cv2.imshow("VPS Live Feed", frame)
+
+    # Break on 'q' key
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Release resources
+cap.release()
+cv2.destroyAllWindows()
+```
+
+### Explanation of the Real-Time Code
+1. **Camera Initialization**:
+   - `cap = cv2.VideoCapture(0)` starts the default camera (index 0). Adjust the index or path if using a different camera.
+
+2. **Live Querying Function** (`query_vps_live`):
+   - For each frame, extract ORB features.
+   - If no features are found (e.g., if the image is too uniform), it returns `None`.
+   - Otherwise, it uses KNN to find the closest matches in the VPS database.
+   - The estimated latitude and longitude are calculated by averaging the GPS coordinates of the top matches.
+
+3. **Overlay Position on Frame**:
+   - The estimated position is overlaid on each frame using `cv2.putText`.
+   - If no position is found, a warning message is shown.
+
+4. **Display Frame**:
+   - The frame is displayed in real time using `cv2.imshow`.
+   - Press 'q' to stop the feed.
+
+### Further Improvements
+- **Filtering Matches by Orientation**: Improve accuracy by adding an orientation filter to refine matches based on camera orientation.
+- **Feature Matching Optimization**: Use methods like FLANN-based matching or specialized GPUs for faster processing if the frame rate is too low.
+- **Stabilizing the Output**: To avoid position jumping between frames, apply smoothing or averaging to the GPS coordinates over consecutive frames.
+
+This code captures and processes frames in real-time, estimating and displaying the camera's approximate position based on database matches. Let me know if you’d like further optimization suggestions or details!
