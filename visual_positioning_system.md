@@ -1,3 +1,5 @@
+# Visual Positioning System
+
 Creating a visual positioning system (VPS) from scratch for an outdoor environment involves careful planning, data collection, and model development tailored to outdoor challenges like lighting changes, seasonal variations, and geographic scale. Here’s how to create one step-by-step:
 
 ### 1. **Define Your VPS Scope and Requirements**
@@ -61,7 +63,8 @@ Creating a visual positioning system (VPS) from scratch for an outdoor environme
    - Regularly update the dataset by adding new images to account for environmental changes or new landmarks, and retrain the model periodically to enhance performance and accuracy.
 
 With a well-structured dataset and a robust model, you can create an effective and adaptive outdoor visual positioning system.
----
+
+# Starter code for VPS
 To build a Visual Positioning System (VPS) from scratch, let's start with a basic pipeline. This code will guide you through essential steps: dataset preparation, feature extraction, similarity matching, and position inference. We’ll use OpenCV for feature extraction and matching and K-Nearest Neighbors (KNN) to handle similarity.
 
 Here's a high-level breakdown of the algorithm, followed by some initial code:
