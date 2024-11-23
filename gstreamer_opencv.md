@@ -306,3 +306,215 @@ if __name__ == "__main__":
 ### **Next Steps**
 - Would you like help integrating **tracking** or **output streaming** into this pipeline?
 - If you’re dealing with RTSP streams or require GPU acceleration, we can adjust the GStreamer pipeline accordingly. Let me know!
+
+
+---
+
+To integrate **object tracking**, **output streaming**, and **GPU acceleration** into the pipeline while handling multiple video streams, we can create a robust architecture. Here's how:
+
+---
+
+### **Pipeline Overview**
+1. **Input Stage**:
+   - Use **GStreamer** pipelines for GPU-accelerated video decoding and real-time stream capture (supports USB cameras, RTSP, and file streams).
+   
+2. **Processing Stage**:
+   - Perform **object detection** using a GPU-accelerated model (e.g., YOLOv8 with PyTorch CUDA or NVIDIA TensorRT).
+   - Use a tracker like **DeepSORT** for multi-object tracking.
+   - Assign unique IDs to detected objects and maintain consistent trajectories.
+
+3. **Output Stage**:
+   - Annotate video frames with detection and tracking information.
+   - Stream the processed output using **GStreamer (appsink -> appsrc)** or save it to a file.
+
+---
+
+### **Pipeline with GPU Acceleration and Tracking**
+Below is a complete example using:
+- **YOLOv8 for detection**.
+- **DeepSORT for tracking**.
+- **GStreamer for input/output**.
+- GPU acceleration for both decoding and inference.
+
+#### **Code**
+```python
+import cv2
+import numpy as np
+from ultralytics import YOLO  # For GPU-accelerated YOLOv8
+from deep_sort_realtime.deepsort_tracker import DeepSort
+from threading import Thread
+
+# Global variable for stopping threads
+stop_threads = False
+
+def gstreamer_pipeline(camera_index, width=640, height=480, fps=30):
+    """
+    Create GStreamer pipeline for GPU-accelerated video capture.
+    """
+    return (
+        f"v4l2src device=/dev/video{camera_index} ! video/x-raw, width={width}, height={height}, framerate={fps}/1 ! "
+        f"nvvidconv ! video/x-raw(memory:NVMM), format=BGRx ! videoconvert ! appsink"
+    )
+
+def gstreamer_output_pipeline(output_path, width=640, height=480, fps=30):
+    """
+    Create GStreamer pipeline for GPU-accelerated video output.
+    """
+    return (
+        f"appsrc ! videoconvert ! x264enc tune=zerolatency ! "
+        f"mpegtsmux ! filesink location={output_path}"
+    )
+
+def process_frame(frame, model, tracker):
+    """
+    Detect objects, track them, and annotate the frame.
+    """
+    # Run object detection with YOLOv8
+    results = model(frame)
+
+    # Prepare detections for DeepSORT: (x1, y1, x2, y2, confidence, class_id)
+    detections = results[0].boxes.data.cpu().numpy() if len(results) > 0 else []
+
+    # Convert detections for DeepSORT tracker
+    detection_list = []
+    for det in detections:
+        x1, y1, x2, y2, conf, cls = det[:6]
+        detection_list.append([x1, y1, x2 - x1, y2 - y1, conf, int(cls)])
+
+    # Update tracker with current detections
+    tracks = tracker.update_tracks(detection_list, frame=frame)
+
+    # Annotate the frame
+    for track in tracks:
+        if not track.is_confirmed() or track.time_since_update > 1:
+            continue
+        x1, y1, x2, y2 = track.to_ltrb()
+        track_id = track.track_id
+        label = f"ID {track_id}"
+        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+        cv2.putText(frame, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+    return frame
+
+def capture_and_process_stream(camera_index, model, tracker, output_path, stream_name="Stream"):
+    """
+    Capture, process, and stream video using GStreamer and OpenCV.
+    """
+    # Initialize GStreamer input
+    input_pipeline = gstreamer_pipeline(camera_index)
+    cap = cv2.VideoCapture(input_pipeline, cv2.CAP_GSTREAMER)
+
+    if not cap.isOpened():
+        print(f"Failed to open stream {stream_name}")
+        return
+
+    # Initialize GStreamer output
+    output_pipeline = gstreamer_output_pipeline(output_path)
+    out = cv2.VideoWriter(output_pipeline, cv2.CAP_GSTREAMER, 0, 30, (640, 480))
+
+    print(f"Started processing {stream_name}")
+    while not stop_threads:
+        ret, frame = cap.read()
+        if not ret:
+            print(f"Stream {stream_name} ended.")
+            break
+
+        # Process the frame (detection, tracking, annotation)
+        processed_frame = process_frame(frame, model, tracker)
+
+        # Write processed frame to output
+        out.write(processed_frame)
+
+        # Display the processed frame locally
+        cv2.imshow(stream_name, processed_frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            global stop_threads
+            stop_threads = True
+            break
+
+    cap.release()
+    out.release()
+    cv2.destroyWindow(stream_name)
+    print(f"Stopped processing {stream_name}")
+
+def main():
+    """
+    Main function to process multiple video streams.
+    """
+    # Load YOLOv8 model with GPU acceleration
+    model = YOLO("yolov8n.pt")
+    model.to("cuda")  # Enable GPU
+
+    # Initialize DeepSORT tracker
+    tracker = DeepSort(max_age=30)
+
+    # Define cameras and output paths
+    streams = {
+        "Optical Camera": {"index": 0, "output": "optical_output.ts"},
+        "IR Camera": {"index": 1, "output": "ir_output.ts"},
+    }
+
+    # Create threads for each stream
+    threads = []
+    for name, config in streams.items():
+        thread = Thread(
+            target=capture_and_process_stream,
+            args=(config["index"], model, tracker, config["output"], name),
+        )
+        thread.start()
+        threads.append(thread)
+
+    # Wait for threads to complete
+    try:
+        for thread in threads:
+            thread.join()
+    except KeyboardInterrupt:
+        global stop_threads
+        stop_threads = True
+        print("Stopping threads...")
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+### **Key Features**
+1. **GPU Acceleration**:
+   - GStreamer uses the NVIDIA `nvvidconv` plugin for decoding and color space conversion.
+   - YOLOv8 leverages GPU for inference (`model.to("cuda")`).
+
+2. **Tracking with DeepSORT**:
+   - Tracks objects across frames using detections from YOLOv8.
+   - Maintains object IDs and trajectories.
+
+3. **Output Streaming**:
+   - Processes frames are streamed to an output file in `.ts` format.
+   - Uses GStreamer for efficient encoding with H.264.
+
+4. **Real-Time Display**:
+   - Local display of annotated frames for debugging and visualization.
+
+---
+
+### **Dependencies**
+Install required packages:
+```bash
+pip install opencv-python-headless opencv-contrib-python ultralytics deep-sort-realtime numpy
+```
+
+Ensure GStreamer is installed with NVIDIA plugins for hardware acceleration:
+```bash
+sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly
+```
+
+---
+
+### **Next Steps**
+- **Extend for RTSP**: Modify `gstreamer_pipeline()` to handle RTSP sources.
+- **Save Processed Logs**: Add functionality to store detections and tracking logs.
+- **Output to RTSP**: Modify `gstreamer_output_pipeline()` to stream output to a network endpoint.
+
+Would you like help setting up RTSP streaming or integrating advanced tracking features?
+
+---
